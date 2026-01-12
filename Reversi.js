@@ -218,6 +218,7 @@
     const state = {
         tiles: {},
         pieces: {}, // Map "row_col" -> GameObject
+        crowns: {},
         boardRoot: null,
         piecesRoot: null,
         isSyncing: false,
@@ -307,6 +308,21 @@
                 pt.localScale = new BS.Vector3(1, 0.3, 1);
                 piece.SetActive(false); // Initially hidden
                 state.pieces[squareId] = piece;
+
+                // Create Crown
+                const crown = await createBanterObject(
+                    state.piecesRoot,
+                    BS.GeometryType.CylinderGeometry,
+                    { radius: 0.15, height: 0.1 },
+                    '#FFD700', // Gold color
+                    new BS.Vector3(xPos, 0.25, zPos),
+                    false
+                );
+                crown.name = `Crown_${squareId}`;
+                const ct = crown.GetComponent(BS.ComponentType.Transform);
+                ct.localScale = new BS.Vector3(1, 0.5, 1);
+                crown.SetActive(false); // Initially hidden
+                state.crowns[squareId] = crown;
             }
         }
     }
@@ -438,9 +454,11 @@
                 const cell = game.board[r][c]; // 0, 1, or 2
                 const key = `${r}_${c}`;
                 const piece = state.pieces[key];
+                const crown = state.crowns[key];
 
                 if (cell === 0) {
                     piece.SetActive(false);
+                    if (crown) crown.SetActive(false);
                 } else {
                     const colorHex = (cell === 1) ? COLORS.black : COLORS.white;
                     const mat = piece.GetComponent(BS.ComponentType.BanterMaterial);
@@ -448,6 +466,12 @@
                         mat.color = hexToVector4(colorHex);
                     }
                     piece.SetActive(true);
+
+                    // Show crown if this piece is a winner
+                    if (crown) {
+                        const showCrown = game.gameOver && game.winner && game.winner !== 'draw' && cell === game.winner;
+                        crown.SetActive(showCrown);
+                    }
                 }
             }
         }
@@ -461,7 +485,6 @@
                     const mat = tile.GetComponent(BS.ComponentType.BanterMaterial);
                     if (mat) {
                         const isValid = !game.gameOver && game.getCaptures(r, c, game.currentPlayer).length > 0;
-                        console.log(`SyncBoard: Tile (${r}, ${c}) for Player ${game.currentPlayer}, isValid: ${isValid}`);
                         mat.color = hexToVector4(isValid ? COLORS.valid : COLORS.board);
                     }
                 }
