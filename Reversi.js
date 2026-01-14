@@ -279,6 +279,7 @@
                 const xPos = (c * size) - state.offset;
                 const zPos = (r * size) - state.offset;
 
+                // Tile needs unique material for valid move highlighting
                 const tile = await createBanterObject(
                     state.boardRoot,
                     BS.GeometryType.BoxGeometry,
@@ -287,21 +288,25 @@
                     new BS.Vector3(xPos, 0, zPos),
                     true, // hasCollider
                     1.0, // opacity
-                    { width: 0.5, height: 0.1, depth: 0.5 } // collider dims
+                    { width: 0.5, height: 0.1, depth: 0.5 }, // collider dims
+                    `tile_${squareId}` // cacheBust
                 );
                 tile.name = `Tile_${squareId}`;
 
                 tile.On('click', () => handleSquareClick(r, c));
                 state.tiles[squareId] = tile;
                 
-                // Create Piece
+                // Piece needs unique material for color changes (black/white)
                 const piece = await createBanterObject(
                     state.piecesRoot,
                     BS.GeometryType.SphereGeometry,
                     { radius: 0.2, height: 0.1 },
                     COLORS.black, // Default color, will be updated
                     new BS.Vector3(xPos, 0.15, zPos),
-                    false
+                    false,
+                    1.0,
+                    null,
+                    `piece_${squareId}` // cacheBust
                 );
                 piece.name = `Piece_${squareId}`;
                 const pt = piece.GetComponent(BS.ComponentType.Transform);
@@ -389,7 +394,7 @@
         }
     }
 
-    async function createBanterObject(parent, type, dims, colorHex, pos, hasCollider = false, opacity = 1.0, colliderDims = null) {
+    async function createBanterObject(parent, type, dims, colorHex, pos, hasCollider = false, opacity = 1.0, colliderDims = null, cacheBust = null) {
         const obj = await new BS.GameObject("Geo").Async();
         await obj.SetParent(parent, false);
 
@@ -402,7 +407,8 @@
         const color = hexToVector4(colorHex, opacity);
 
         const shader = opacity < 1.0 ? "Unlit/DiffuseTransparent" : "Unlit/Diffuse";
-        await obj.AddComponent(new BS.BanterMaterial(shader, "", color, BS.MaterialSide.Front, false));
+        // Use cacheBust to create unique material instance for objects that need dynamic colors
+        await obj.AddComponent(new BS.BanterMaterial(shader, "", color, BS.MaterialSide.Front, false, cacheBust || ""));
 
         if (hasCollider) {
             const cDims = colliderDims || dims;
