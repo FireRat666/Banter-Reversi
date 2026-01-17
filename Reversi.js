@@ -483,6 +483,8 @@
 
             t.localScale = new BS.Vector3(0.18, 0.18, 0.18); // Matches Checkers for 0.5 grid
             t.localEulerAngles = new BS.Vector3(0, 0, 0);    // Flat rotation 
+            
+            piece.currentType = player; // Tag immediately on creation 
         } catch (glbErr) {
             console.error(`Failed to load GLTF for player ${player}:`, glbErr);
         }
@@ -580,9 +582,12 @@
                                 // We can tag the piece with its current type
                                 if (piece.currentType !== cell) {
                                     piece.Destroy();
+                                    state.pieces[key] = null; // Prevent race access
                                     state.pieces[key] = await createCustomPiece(state.piecesRoot, cell, new BS.Vector3(xPos, 0.1, zPos));
-                                    state.pieces[key].SetActive(true);
-                                    state.pieces[key].currentType = cell;
+                                    if (state.pieces[key]) { // Check existence
+                                        state.pieces[key].SetActive(true);
+                                        state.pieces[key].currentType = cell;
+                                    }
                                 }
                             } else {
                                 // Standard: just update color
