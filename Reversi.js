@@ -547,7 +547,7 @@
                         // 1. Player Piece
                         if (!state.pieces[key]) {
                             if (config.useCustomModels) {
-                                state.pieces[key] = await createCustomPiece(state.piecesRoot, cell, new BS.Vector3(xPos, 0.015, zPos));
+                                state.pieces[key] = await createCustomPiece(state.piecesRoot, cell, new BS.Vector3(xPos, 0.1, zPos));
                             } else {
                                 const piece = await createBanterObject(
                                     state.piecesRoot,
@@ -580,7 +580,7 @@
                                 // We can tag the piece with its current type
                                 if (piece.currentType !== cell) {
                                     piece.Destroy();
-                                    state.pieces[key] = await createCustomPiece(state.piecesRoot, cell, new BS.Vector3(xPos, 0.015, zPos));
+                                    state.pieces[key] = await createCustomPiece(state.piecesRoot, cell, new BS.Vector3(xPos, 0.1, zPos));
                                     state.pieces[key].SetActive(true);
                                     state.pieces[key].currentType = cell;
                                 }
