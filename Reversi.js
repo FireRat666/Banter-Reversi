@@ -247,7 +247,9 @@
         isSyncing: false,
         tileSize: 0.5,
         boardSize: 8,
-        offset: 0
+        offset: 0,
+        syncLock: false,
+        pendingSync: false
     };
     state.offset = (state.boardSize * state.tileSize) / 2 - (state.tileSize / 2);
 
@@ -525,122 +527,128 @@
     }
 
     async function syncBoard() {
-        const game = window.reversiGame;
-        const size = state.tileSize;
+        if (state.syncLock) {
+            state.pendingSync = true;
+            return;
+        }
+        state.syncLock = true;
 
-        const syncPromises = [];
+        try {
+            const game = window.reversiGame;
+            const size = state.tileSize;
+            const syncPromises = [];
 
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                syncPromises.push((async () => {
-                    const cell = game.board[r][c]; // 0, 1, or 2
-                    const key = `${r}_${c}`;
-                    
-                    const xPos = (c * size) - state.offset;
-                    const zPos = (r * size) - state.offset;
-                    
-                    if (cell === 0) {
-                        // Hide existing
-                        if (state.pieces[key]) state.pieces[key].SetActive(false);
-                        if (state.crowns[key]) state.crowns[key].SetActive(false);
-                    } else {
-                        // Create or Show
+            for (let r = 0; r < 8; r++) {
+                for (let c = 0; c < 8; c++) {
+                    syncPromises.push((async () => {
+                        const cell = game.board[r][c]; // 0, 1, or 2
+                        const key = `${r}_${c}`;
                         
-                        // 1. Player Piece
-                        if (!state.pieces[key]) {
-                            if (config.useCustomModels) {
-                                state.pieces[key] = await createCustomPiece(state.piecesRoot, cell, new BS.Vector3(xPos, 0.1, zPos));
-                            } else {
-                                const piece = await createBanterObject(
-                                    state.piecesRoot,
-                                    BS.GeometryType.SphereGeometry,
-                                    { radius: 0.2, height: 0.1 },
-                                    COLORS.black, 
-                                    new BS.Vector3(xPos, 0.15, zPos),
-                                    false,
-                                    1.0,
-                                    null,
-                                    `piece_${key}`
-                                );
-                                const pt = piece.GetComponent(BS.ComponentType.Transform);
-                                pt.localScale = new BS.Vector3(1, 0.3, 1);
-                                state.pieces[key] = piece;
-                            }
-                        }
-
-                        // Update Appearance
-                        const piece = state.pieces[key];
-                        if (piece) {
-                            piece.SetActive(true);
-                            // Update model/color if it changed (Reversi flips pieces!)
-                            // If Custom Models: We might need to destroy and recreate if color changed? 
-                            // Or just change material color? The models 'DiscDarkestGrey' vs 'DiscGrey' imply different geometry files.
-                            // So for Custom Models, if the type changed, we MUST destroy and recreate.
-                            
-                            if (config.useCustomModels) {
-                                // Check if we need to swap model (e.g. was Black, now White)
-                                // We can tag the piece with its current type
+                        const xPos = (c * size) - state.offset;
+                        const zPos = (r * size) - state.offset;
+                        
+                        if (cell === 0) {
+                            // Hide existing
+                            if (state.pieces[key]) state.pieces[key].SetActive(false);
+                            if (state.crowns[key]) state.crowns[key].SetActive(false);
+                        } else {
+                            // 1. Handle Piece Destuction/Creation for Custom Models
+                            let piece = state.pieces[key];
+                            if (piece && config.useCustomModels) {
+                                // If type mismatch, destroy it
                                 if (piece.currentType !== cell) {
                                     piece.Destroy();
-                                    state.pieces[key] = null; // Prevent race access
-                                    state.pieces[key] = await createCustomPiece(state.piecesRoot, cell, new BS.Vector3(xPos, 0.1, zPos));
-                                    if (state.pieces[key]) { // Check existence
-                                        state.pieces[key].SetActive(true);
-                                        state.pieces[key].currentType = cell;
-                                    }
+                                    state.pieces[key] = null;
+                                    piece = null;
                                 }
+                            }
+
+                            // 2. Create if missing
+                            if (!piece) {
+                                if (config.useCustomModels) {
+                                    piece = await createCustomPiece(state.piecesRoot, cell, new BS.Vector3(xPos, 0.1, zPos));
+                                } else {
+                                    piece = await createBanterObject(
+                                        state.piecesRoot,
+                                        BS.GeometryType.SphereGeometry,
+                                        { radius: 0.2, height: 0.1 },
+                                        COLORS.black, 
+                                        new BS.Vector3(xPos, 0.15, zPos),
+                                        false,
+                                        1.0,
+                                        null,
+                                        `piece_${key}`
+                                    );
+                                    const pt = piece.GetComponent(BS.ComponentType.Transform);
+                                    pt.localScale = new BS.Vector3(1, 0.3, 1);
+                                }
+                                state.pieces[key] = piece;
+                            }
+
+                            // 3. Update Appearance
+                            if (piece) {
+                                piece.SetActive(true);
+                                if (!config.useCustomModels) {
+                                     // Standard: update color
+                                    const colorHex = (cell === 1) ? COLORS.black : COLORS.white;
+                                    const mat = piece.GetComponent(BS.ComponentType.BanterMaterial);
+                                    if (mat) mat.color = hexToVector4(colorHex);
+                                } else {
+                                     // Custom Models: Ensure type tag is set
+                                     piece.currentType = cell;
+                                }
+                            }
+
+                            // 2. Crown (Game Over winner highlight)
+                            const showCrown = game.gameOver && game.winner && game.winner !== 'draw' && cell === game.winner;
+                            if (showCrown) {
+                                if (!state.crowns[key]) {
+                                    const crown = await createBanterObject(
+                                        state.piecesRoot,
+                                        BS.GeometryType.CylinderGeometry,
+                                        { radius: 0.15, height: 0.1 },
+                                        '#FFD700', // Gold color
+                                        new BS.Vector3(xPos, 0.25, zPos),
+                                        false
+                                    );
+                                    const ct = crown.GetComponent(BS.ComponentType.Transform);
+                                    ct.localScale = new BS.Vector3(1, 0.5, 1);
+                                    state.crowns[key] = crown;
+                                }
+                                state.crowns[key].SetActive(true);
                             } else {
-                                // Standard: just update color
-                                const colorHex = (cell === 1) ? COLORS.black : COLORS.white;
-                                const mat = piece.GetComponent(BS.ComponentType.BanterMaterial);
-                                if (mat) mat.color = hexToVector4(colorHex);
+                                if (state.crowns[key]) state.crowns[key].SetActive(false);
                             }
                         }
-
-                        // 2. Crown (Game Over winner highlight)
-                        // Only needed if game over and this piece belongs to winner
-                        const showCrown = game.gameOver && game.winner && game.winner !== 'draw' && cell === game.winner;
-                        if (showCrown) {
-                            if (!state.crowns[key]) {
-                                // Create crown on demand
-                                const crown = await createBanterObject(
-                                    state.piecesRoot,
-                                    BS.GeometryType.CylinderGeometry,
-                                    { radius: 0.15, height: 0.1 },
-                                    '#FFD700', // Gold color
-                                    new BS.Vector3(xPos, 0.25, zPos),
-                                    false
-                                );
-                                const ct = crown.GetComponent(BS.ComponentType.Transform);
-                                ct.localScale = new BS.Vector3(1, 0.5, 1);
-                                state.crowns[key] = crown;
-                            }
-                            state.crowns[key].SetActive(true);
-                        } else {
-                            if (state.crowns[key]) state.crowns[key].SetActive(false);
-                        }
-                    }
-                })());
+                    })());
+                }
             }
-        }
-        await Promise.all(syncPromises);
+            await Promise.all(syncPromises);
 
-        // Highlight Valid Moves
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                const key = `${r}_${c}`;
-                const tile = state.tiles[key];
-                if (tile) {
-                    const mat = tile.GetComponent(BS.ComponentType.BanterMaterial);
-                    if (mat) {
-                        const isValid = !config.hideBoard && !game.gameOver && game.getCaptures(r, c, game.currentPlayer).length > 0;
-                        mat.color = hexToVector4(isValid ? COLORS.valid : COLORS.board);
-                        if (config.hideBoard) mat.color.w = 0; // Ensure invisible if hidden
+            // Highlight Valid Moves
+            for (let r = 0; r < 8; r++) {
+                for (let c = 0; c < 8; c++) {
+                    const key = `${r}_${c}`;
+                    const tile = state.tiles[key];
+                    if (tile) {
+                        const mat = tile.GetComponent(BS.ComponentType.BanterMaterial);
+                        if (mat) {
+                            const isValid = !config.hideBoard && !game.gameOver && game.getCaptures(r, c, game.currentPlayer).length > 0;
+                            mat.color = hexToVector4(isValid ? COLORS.valid : COLORS.board);
+                            if (config.hideBoard) mat.color.w = 0;
+                        }
                     }
                 }
             }
+        } finally {
+            state.syncLock = false;
+            if (state.pendingSync) {
+                state.pendingSync = false;
+                syncBoard();
+            } else {
+                state.isSyncing = false; // Unlock input only when fully synced and no pending calls
+            }
         }
-        state.isSyncing = false; // Unlock
     }
 
     async function checkForExistingState() {
