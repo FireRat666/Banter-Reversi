@@ -481,8 +481,8 @@
             const colorHex = (player === 1) ? COLORS.black : COLORS.white;
             await piece.AddComponent(new BS.BanterMaterial(shader, "", hexToVector4(colorHex), BS.MaterialSide.Front, false));
 
-            t.localScale = new BS.Vector3(0.04, 0.04, 0.04);
-            t.localEulerAngles = new BS.Vector3(90, 0, 0); 
+            t.localScale = new BS.Vector3(0.18, 0.18, 0.18); // Matches Checkers for 0.5 grid
+            t.localEulerAngles = new BS.Vector3(0, 0, 0);    // Flat rotation 
         } catch (glbErr) {
             console.error(`Failed to load GLTF for player ${player}:`, glbErr);
         }
