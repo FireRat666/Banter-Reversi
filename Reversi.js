@@ -13,7 +13,17 @@
         resetRotation: new BS.Vector3(0, 0, 0),
         resetScale: new BS.Vector3(1, 1, 1),
         instance: window.location.href.split('?')[0],
-        hideUI: false
+        hideUI: false,
+        hideBoard: false,
+        useCustomModels: false,
+        lighting: 'unlit',
+        addLights: true
+    };
+
+    const PIECE_MODELS = {
+        1: 'DiscDarkestGrey.glb', // Black
+        2: 'DiscGrey.glb',        // White
+        'highlight': 'DiscGreen.glb' // Valid move hint potentially? Or just tile highlight.
     };
 
     // Helper to parse Vector3 from string
@@ -30,6 +40,15 @@
         return defaultVal;
     };
 
+    function getModelUrl(modelName) {
+        try {
+            if (currentScript) {
+                return new URL(`../Models/${modelName}`, currentScript.src).href;
+            }
+        } catch (e) { console.error("Error resolving model URL:", e); }
+        return `../Models/${modelName}`;
+    }
+
     // Parse URL params from this script tag
     const currentScript = document.currentScript;
     if (currentScript) {
@@ -37,7 +56,11 @@
         const params = new URLSearchParams(url.search);
 
         if (params.has('hideUI')) config.hideUI = params.get('hideUI') === 'true';
+        if (params.has('hideBoard')) config.hideBoard = params.get('hideBoard') === 'true';
         if (params.has('instance')) config.instance = params.get('instance');
+        if (params.has('useCustomModels')) config.useCustomModels = params.get('useCustomModels') === 'true';
+        if (params.has('lighting')) config.lighting = params.get('lighting');
+        if (params.has('addLights')) config.addLights = params.get('addLights') !== 'false';
 
         config.boardScale = parseVector3(params.get('boardScale'), config.boardScale);
         config.boardPosition = parseVector3(params.get('boardPosition'), config.boardPosition);
@@ -250,13 +273,23 @@
         t.localEulerAngles = config.boardRotation;
         t.localScale = config.boardScale;
 
+        // Add lights if lit
+        if (config.lighting === 'lit' && config.addLights) {
+            const lightGO = await new BS.GameObject("Reversi_DirectionalLight");
+            await lightGO.SetParent(state.boardRoot, false);
+            let lightTrans = await lightGO.AddComponent(new BS.Transform());
+            lightTrans.localPosition = new BS.Vector3(0, 5, -5);
+            lightTrans.localEulerAngles = new BS.Vector3(45, 0, 0);
+            await lightGO.AddComponent(new BS.Light(1, new BS.Vector4(1, 1, 1, 1), 1, 0.1));
+        }
+
         // Create Pieces Root
         state.piecesRoot = await new BS.GameObject("PiecesRoot").Async();
         await state.piecesRoot.SetParent(state.boardRoot, false);
         await state.piecesRoot.AddComponent(new BS.Transform());
 
-        // Create Board Tiles and Pieces
-        await generateTilesAndPieces();
+        // Create Board Tiles (Lazy setup for pieces)
+        await setupGrid();
 
         // Create Reset Button
         if (!config.hideUI) {
@@ -271,65 +304,58 @@
         syncBoard();
     }
 
-    async function generateTilesAndPieces() {
+    async function setupGrid() {
         const size = state.tileSize;
+        // Parallelize tile creation
+        const tilePromises = [];
+        
         for (let r = 0; r < 8; r++) {
             for (let c = 0; c < 8; c++) {
-                const squareId = `${r}_${c}`;
-                const xPos = (c * size) - state.offset;
-                const zPos = (r * size) - state.offset;
+                tilePromises.push((async () => {
+                    const squareId = `${r}_${c}`;
+                    const xPos = (c * size) - state.offset;
+                    const zPos = (r * size) - state.offset;
 
-                // Tile needs unique material for valid move highlighting
-                const tile = await createBanterObject(
-                    state.boardRoot,
-                    BS.GeometryType.BoxGeometry,
-                    { width: 0.48, height: 0.1, depth: 0.48 }, // visual dims
-                    COLORS.board,
-                    new BS.Vector3(xPos, 0, zPos),
-                    true, // hasCollider
-                    1.0, // opacity
-                    { width: 0.5, height: 0.1, depth: 0.5 }, // collider dims
-                    `tile_${squareId}` // cacheBust
-                );
-                tile.name = `Tile_${squareId}`;
+                    // Tile needs unique material for valid move highlighting
+                    if (!config.hideBoard) {
+                        const tile = await createBanterObject(
+                            state.boardRoot,
+                            BS.GeometryType.BoxGeometry,
+                            { width: 0.48, height: 0.1, depth: 0.48 }, // visual dims
+                            COLORS.board,
+                            new BS.Vector3(xPos, 0, zPos),
+                            true, // hasCollider
+                            1.0, // opacity
+                            { width: 0.5, height: 0.1, depth: 0.5 }, // collider dims
+                            `tile_${squareId}` // cacheBust
+                        );
+                        tile.name = `Tile_${squareId}`;
+                        tile.On('click', () => handleSquareClick(r, c));
+                        state.tiles[squareId] = tile;
+                    } else {
+                        // Invisible collider if board invisible
+                        const tile = await createBanterObject(
+                            state.boardRoot,
+                            BS.GeometryType.BoxGeometry,
+                            { width: 0.5, height: 0.1, depth: 0.5 }, 
+                            COLORS.board,
+                            new BS.Vector3(xPos, 0, zPos),
+                            true, 
+                            0.0, // Invisible
+                            null,
+                            `tile_${squareId}`
+                        );
+                        tile.On('click', () => handleSquareClick(r, c));
+                        state.tiles[squareId] = tile;
+                    }
 
-                tile.On('click', () => handleSquareClick(r, c));
-                state.tiles[squareId] = tile;
-                
-                // Piece needs unique material for color changes (black/white)
-                const piece = await createBanterObject(
-                    state.piecesRoot,
-                    BS.GeometryType.SphereGeometry,
-                    { radius: 0.2, height: 0.1 },
-                    COLORS.black, // Default color, will be updated
-                    new BS.Vector3(xPos, 0.15, zPos),
-                    false,
-                    1.0,
-                    null,
-                    `piece_${squareId}` // cacheBust
-                );
-                piece.name = `Piece_${squareId}`;
-                const pt = piece.GetComponent(BS.ComponentType.Transform);
-                pt.localScale = new BS.Vector3(1, 0.3, 1);
-                piece.SetActive(false); // Initially hidden
-                state.pieces[squareId] = piece;
-
-                // Create Crown
-                const crown = await createBanterObject(
-                    state.piecesRoot,
-                    BS.GeometryType.CylinderGeometry,
-                    { radius: 0.15, height: 0.1 },
-                    '#FFD700', // Gold color
-                    new BS.Vector3(xPos, 0.25, zPos),
-                    false
-                );
-                crown.name = `Crown_${squareId}`;
-                const ct = crown.GetComponent(BS.ComponentType.Transform);
-                ct.localScale = new BS.Vector3(1, 0.5, 1);
-                crown.SetActive(false); // Initially hidden
-                state.crowns[squareId] = crown;
+                    // Lazy Instantiation: don't create pieces yet
+                    state.pieces[squareId] = null; 
+                    state.crowns[squareId] = null;
+                })());
             }
         }
+        await Promise.all(tilePromises);
     }
 
     async function createResetButton() {
@@ -420,6 +446,50 @@
         return obj;
     }
 
+    async function createCustomPiece(parent, player, pos) {
+        let modelName;
+        if (player === 1) modelName = PIECE_MODELS[1];
+        else if (player === 2) modelName = PIECE_MODELS[2];
+        else modelName = 'Crown.glb';
+
+        if (!modelName) return null;
+
+        const piece = await new BS.GameObject(`CustomPiece_${player}`).Async();
+        await piece.SetParent(parent, false);
+
+        let t = await piece.AddComponent(new BS.Transform());
+        if (pos) t.localPosition = pos;
+        
+        const url = getModelUrl(modelName);
+        
+        try {
+            await piece.AddComponent(new BS.BanterGLTF(url, false, false, false, false, false, false));
+
+            // Add material for interactivity/lighting (though we might not change color of GLB directly if textured)
+            // But we can.
+            const shader = config.lighting === 'lit' ? "Standard" : "Unlit/Diffuse";
+            
+            // Reversi pieces: Black is Black, White is White.
+            // If using custom models, they should be textured.
+            // We can add a material to affect them if needed, or rely on GLB textures.
+            // BUt we want 'lit' shader if config says so.
+            // Since we can't easily replace shaders on GLB without traversing, maybe we just trust the GLB or add simple mat.
+            // Let's force a material if we want to control lighting, but keep white color so texture shows?
+            // Actually, for BanterGLTF, adding a material usually applies to the whole object.
+            
+            // For simple discs (Black/White), we can just set the color if we want.
+            const colorHex = (player === 1) ? COLORS.black : COLORS.white;
+            await piece.AddComponent(new BS.BanterMaterial(shader, "", hexToVector4(colorHex), BS.MaterialSide.Front, false));
+
+            t.localScale = new BS.Vector3(0.04, 0.04, 0.04);
+            t.localEulerAngles = new BS.Vector3(90, 0, 0); 
+        } catch (glbErr) {
+            console.error(`Failed to load GLTF for player ${player}:`, glbErr);
+        }
+
+        return piece;
+    }
+
     function handleSquareClick(row, col) {
         const game = window.reversiGame;
         console.log(`Clicked: (${row}, ${col})`);
@@ -454,33 +524,101 @@
 
     async function syncBoard() {
         const game = window.reversiGame;
+        const size = state.tileSize;
+
+        const syncPromises = [];
 
         for (let r = 0; r < 8; r++) {
             for (let c = 0; c < 8; c++) {
-                const cell = game.board[r][c]; // 0, 1, or 2
-                const key = `${r}_${c}`;
-                const piece = state.pieces[key];
-                const crown = state.crowns[key];
+                syncPromises.push((async () => {
+                    const cell = game.board[r][c]; // 0, 1, or 2
+                    const key = `${r}_${c}`;
+                    
+                    const xPos = (c * size) - state.offset;
+                    const zPos = (r * size) - state.offset;
+                    
+                    if (cell === 0) {
+                        // Hide existing
+                        if (state.pieces[key]) state.pieces[key].SetActive(false);
+                        if (state.crowns[key]) state.crowns[key].SetActive(false);
+                    } else {
+                        // Create or Show
+                        
+                        // 1. Player Piece
+                        if (!state.pieces[key]) {
+                            if (config.useCustomModels) {
+                                state.pieces[key] = await createCustomPiece(state.piecesRoot, cell, new BS.Vector3(xPos, 0.015, zPos));
+                            } else {
+                                const piece = await createBanterObject(
+                                    state.piecesRoot,
+                                    BS.GeometryType.SphereGeometry,
+                                    { radius: 0.2, height: 0.1 },
+                                    COLORS.black, 
+                                    new BS.Vector3(xPos, 0.15, zPos),
+                                    false,
+                                    1.0,
+                                    null,
+                                    `piece_${key}`
+                                );
+                                const pt = piece.GetComponent(BS.ComponentType.Transform);
+                                pt.localScale = new BS.Vector3(1, 0.3, 1);
+                                state.pieces[key] = piece;
+                            }
+                        }
 
-                if (cell === 0) {
-                    piece.SetActive(false);
-                    if (crown) crown.SetActive(false);
-                } else {
-                    const colorHex = (cell === 1) ? COLORS.black : COLORS.white;
-                    const mat = piece.GetComponent(BS.ComponentType.BanterMaterial);
-                    if (mat) {
-                        mat.color = hexToVector4(colorHex);
-                    }
-                    piece.SetActive(true);
+                        // Update Appearance
+                        const piece = state.pieces[key];
+                        if (piece) {
+                            piece.SetActive(true);
+                            // Update model/color if it changed (Reversi flips pieces!)
+                            // If Custom Models: We might need to destroy and recreate if color changed? 
+                            // Or just change material color? The models 'DiscDarkestGrey' vs 'DiscGrey' imply different geometry files.
+                            // So for Custom Models, if the type changed, we MUST destroy and recreate.
+                            
+                            if (config.useCustomModels) {
+                                // Check if we need to swap model (e.g. was Black, now White)
+                                // We can tag the piece with its current type
+                                if (piece.currentType !== cell) {
+                                    piece.Destroy();
+                                    state.pieces[key] = await createCustomPiece(state.piecesRoot, cell, new BS.Vector3(xPos, 0.015, zPos));
+                                    state.pieces[key].SetActive(true);
+                                    state.pieces[key].currentType = cell;
+                                }
+                            } else {
+                                // Standard: just update color
+                                const colorHex = (cell === 1) ? COLORS.black : COLORS.white;
+                                const mat = piece.GetComponent(BS.ComponentType.BanterMaterial);
+                                if (mat) mat.color = hexToVector4(colorHex);
+                            }
+                        }
 
-                    // Show crown if this piece is a winner
-                    if (crown) {
+                        // 2. Crown (Game Over winner highlight)
+                        // Only needed if game over and this piece belongs to winner
                         const showCrown = game.gameOver && game.winner && game.winner !== 'draw' && cell === game.winner;
-                        crown.SetActive(showCrown);
+                        if (showCrown) {
+                            if (!state.crowns[key]) {
+                                // Create crown on demand
+                                const crown = await createBanterObject(
+                                    state.piecesRoot,
+                                    BS.GeometryType.CylinderGeometry,
+                                    { radius: 0.15, height: 0.1 },
+                                    '#FFD700', // Gold color
+                                    new BS.Vector3(xPos, 0.25, zPos),
+                                    false
+                                );
+                                const ct = crown.GetComponent(BS.ComponentType.Transform);
+                                ct.localScale = new BS.Vector3(1, 0.5, 1);
+                                state.crowns[key] = crown;
+                            }
+                            state.crowns[key].SetActive(true);
+                        } else {
+                            if (state.crowns[key]) state.crowns[key].SetActive(false);
+                        }
                     }
-                }
+                })());
             }
         }
+        await Promise.all(syncPromises);
 
         // Highlight Valid Moves
         for (let r = 0; r < 8; r++) {
@@ -490,8 +628,9 @@
                 if (tile) {
                     const mat = tile.GetComponent(BS.ComponentType.BanterMaterial);
                     if (mat) {
-                        const isValid = !game.gameOver && game.getCaptures(r, c, game.currentPlayer).length > 0;
+                        const isValid = !config.hideBoard && !game.gameOver && game.getCaptures(r, c, game.currentPlayer).length > 0;
                         mat.color = hexToVector4(isValid ? COLORS.valid : COLORS.board);
+                        if (config.hideBoard) mat.color.w = 0; // Ensure invisible if hidden
                     }
                 }
             }
