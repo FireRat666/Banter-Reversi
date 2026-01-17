@@ -434,7 +434,7 @@
 
         const color = hexToVector4(colorHex, opacity);
 
-        const shader = config.lighting === 'lit' ? "Standard" : (opacity < 1.0 ? "Unlit/DiffuseTransparent" : "Unlit/Diffuse");
+        const shader = opacity < 1.0 ? "Unlit/DiffuseTransparent" : (config.lighting === 'lit' ? "Standard" : "Unlit/Diffuse");
         // Use cacheBust to create unique material instance for objects that need dynamic colors
         await obj.AddComponent(new BS.BanterMaterial(shader, "", color, BS.MaterialSide.Front, false, cacheBust || ""));
 
